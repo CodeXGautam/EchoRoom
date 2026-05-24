@@ -1,0 +1,27 @@
+# Node
+node_modules/
+.next/
+
+# Go
+bin/
+vendor/
+
+# Env
+.env
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Coverage
+coverage/
+
+# Docker
+*.tar
