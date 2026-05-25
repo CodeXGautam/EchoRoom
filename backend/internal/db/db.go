@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"net"
+	"net/url"
 	"strings"
 	"time"
+
 	"github.com/CodeXGautam/echoroom/internal/config"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -19,13 +20,13 @@ type DB struct {
 	pool *pgxpool.Pool
 }
 
-func (d *DB) NewPool(ctx context.Context, cfg *config.PostgresConfig) (*DB, error) {
+func NewPool(ctx context.Context, cfg *config.PostgresConfig) (*DB, error) {
 	if ctx == nil {
-		return  nil, errors.New("Postgres context is nil")
-	} 
-	poolconfig , err := buildPoolConfig(cfg)
+		return nil, errors.New("Postgres context is nil")
+	}
+	poolconfig, err := buildPoolConfig(cfg)
 	if err != nil {
-		return nil , errors.New("Pool config failed")
+		return nil, errors.New("Pool config failed")
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolconfig)
@@ -36,7 +37,7 @@ func (d *DB) NewPool(ctx context.Context, cfg *config.PostgresConfig) (*DB, erro
 	pingCtx, cancel := context.WithTimeout(ctx, defaultPingTimeout)
 
 	defer cancel()
-	if err := pool.Ping(pingCtx);err !=nil {
+	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
@@ -59,7 +60,6 @@ func (p *DB) Pool() *pgxpool.Pool {
 
 	return p.pool
 }
-
 
 func buildPoolConfig(cfg *config.PostgresConfig) (*pgxpool.Config, error) {
 	if cfg == nil {
