@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -197,6 +198,9 @@ func validateConfig(cfg *Config, errs *[]error) {
 	if !cfg.Auth.DevMode && cfg.Auth.SupabaseURL == "" {
 		*errs = append(*errs, errors.New("SUPABASE_URL is required unless AUTH_DEV_MODE=true"))
 	}
+	if cfg.Auth.SupabaseURL != "" {
+		validateSupabaseURL(cfg.Auth.SupabaseURL, errs)
+	}
 	if len(cfg.HTTP.AllowedOrigins) == 0 {
 		*errs = append(*errs, errors.New("ALLOWED_ORIGINS must list at least one origin"))
 	}
@@ -224,6 +228,20 @@ func validateConfig(cfg *Config, errs *[]error) {
 	validateDuration("HTTP_READ_TIMEOUT", cfg.HTTP.ReadTimeout, errs)
 	validateDuration("HTTP_WRITE_TIMEOUT", cfg.HTTP.WriteTimeout, errs)
 	validateDuration("HTTP_SHUTDOWN_TIMEOUT", cfg.HTTP.ShutdownTimeout, errs)
+}
+
+// validateSupabaseURL fails fast on the common mistake of pasting the REST
+// endpoint (https://<ref>.supabase.co/rest/v1) instead of the project URL.
+// Otherwise every token would fail later with an unhelpful 401.
+func validateSupabaseURL(raw string, errs *[]error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		*errs = append(*errs, fmt.Errorf("SUPABASE_URL must be like https://<ref>.supabase.co: %q", raw))
+		return
+	}
+	if u.Path != "" || u.RawQuery != "" {
+		*errs = append(*errs, fmt.Errorf("SUPABASE_URL must be the bare project URL %s://%s, without path %q", u.Scheme, u.Host, u.Path))
+	}
 }
 
 func validatePostgresFields(cfg *Config, errs *[]error) {
