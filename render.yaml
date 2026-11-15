@@ -1,0 +1,35 @@
+# Render Blueprint: Dashboard → New → Blueprint → pick this repo.
+# Creates the Go API (Docker) and a free Key Value (Valkey/Redis) instance.
+# Secrets marked `sync: false` are asked for in the dashboard, never committed.
+services:
+  - type: web
+    name: echoroom-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: singapore # keep next to the Supabase project (ap-southeast-1)
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: AUTH_DEV_MODE
+        value: "false"
+      - key: SUPABASE_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false # e.g. https://echoroom.vercel.app
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: echoroom-kv
+          property: connectionString
+
+  - type: keyvalue
+    name: echoroom-kv
+    plan: free
+    region: singapore
+    ipAllowList: [] # internal connections from Render services only

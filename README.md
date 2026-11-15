@@ -1,260 +1,139 @@
 # EchoRoom
 
-## Distributed Real-Time Communication Platform
+**A cosy room where little doodles wander around and chat.**
 
-EchoRoom is a cloud-native, distributed real-time communication platform engineered to deliver scalable, low-latency messaging experiences. The platform leverages WebSocket-based communication, Redis Pub/Sub messaging infrastructure, PostgreSQL persistence, and Kubernetes orchestration to provide a robust and horizontally scalable chat ecosystem.
+Pick a name and a colour, walk your doodle around a shared room, and whatever you type pops up as a speech bubble above your head. Everyone online in the room can see you, and you can sit at tables or keep permanent group chats.
 
-The project is designed around modern backend engineering principles, emphasizing distributed systems, event-driven architectures, observability, fault tolerance, and cloud-native deployment strategies.
+Under the hood it is a real-time distributed system: a Go WebSocket service with one goroutine per room, Redis pub/sub for fan-out across replicas, Supabase for Postgres and auth, and Kubernetes manifests for running several replicas locally.
 
----
-
-## Key Features
-
-### Real-Time Messaging
-
-* Native WebSocket communication
-* Low-latency message delivery
-* Persistent message storage
-* Channel-based conversations
-* Private messaging support
-
-### Authentication & Security
-
-* JWT-based authentication
-* Secure password hashing using bcrypt
-* Protected API endpoints
-* Session management
-
-### Distributed Architecture
-
-* Redis Pub/Sub synchronization
-* Multi-instance message broadcasting
-* Stateless backend services
-* Horizontal scalability
-
-### Cloud-Native Infrastructure
-
-* Containerized services
-* Kubernetes deployment support
-* Load balancing and service discovery
-* Graceful shutdown handling
-* Health monitoring endpoints
-
-### Observability
-
-* Structured logging using slog
-* Centralized log aggregation support
-* Metrics collection readiness
-* Distributed tracing integration support
+> Status: **Phase 1** done: guests join one lobby and see each other's doodles move in real time. Chat bubbles are next. See [docs/PLAN.md](docs/PLAN.md).
 
 ---
 
-## Technology Stack
-
-### Backend
-
-| Technology        | Purpose                 |
-| ----------------- | ----------------------- |
-| Go                | Backend Development     |
-| Gin               | HTTP Framework          |
-| Gorilla WebSocket | Real-Time Communication |
-| Ent ORM           | Database Access Layer   |
-| PostgreSQL        | Primary Database        |
-| Redis             | Pub/Sub Messaging       |
-| JWT               | Authentication          |
-| slog              | Structured Logging      |
-
-### Frontend
-
-| Technology   | Purpose            |
-| ------------ | ------------------ |
-| Next.js      | Frontend Framework |
-| React        | User Interface     |
-| TypeScript   | Type Safety        |
-| Tailwind CSS | Styling            |
-| Zustand      | State Management   |
-
-### Infrastructure
-
-| Technology     | Purpose           |
-| -------------- | ----------------- |
-| Docker         | Containerization  |
-| Docker Compose | Local Development |
-| Kubernetes     | Orchestration     |
-| NGINX Ingress  | Traffic Routing   |
-
----
-
-## System Architecture
+## Architecture
 
 ```text
-                    ┌─────────────────┐
-                    │   Next.js UI    │
-                    └────────┬────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │   Gin API Layer │
-                    └────────┬────────┘
-                             │
-      ┌──────────────────────┼──────────────────────┐
-      │                      │                      │
-      ▼                      ▼                      ▼
-
-┌────────────┐       ┌──────────────┐      ┌──────────────┐
-│ Auth Layer │       │ WebSocket Hub│      │ Chat Service │
-└─────┬──────┘       └──────┬───────┘      └──────┬───────┘
-      │                     │                     │
-      └─────────────┬───────┴───────┬─────────────┘
-                    ▼               ▼
-
-              ┌─────────┐     ┌────────────┐
-              │ Redis   │     │ PostgreSQL │
-              └─────────┘     └────────────┘
+ Browser ── Next.js + Phaser (Vercel)
+   │  HTTPS  POST /api/v1/ws/ticket   (Authorization: Bearer <Supabase JWT>)
+   │  WSS    /ws?ticket=…             (one-time ticket, 30 s)
+   ▼
+ Go API (Render · Docker · kind/k8s locally)
+   ├─ auth     verify Supabase JWT via JWKS
+   ├─ ws       ticket store, read/write pumps, rate limit, pings
+   └─ room     one goroutine per room: join/leave/move, 10 Hz batched broadcast
+   │                                  │
+   ▼                                  ▼
+ Supabase Postgres + Auth          Redis / Valkey (tickets · pub/sub · presence)
 ```
 
----
+**Key design choices**
 
-## Project Structure
+- **Actor-style rooms.** Each room's state is owned by a single goroutine, and everything else talks to it over channels. There are no mutexes and no data races by construction.
+- **Batched movement.** Moves are collected and broadcast once per 100 ms tick, which gives N frames per tick instead of N².
+- **Client-side prediction, server validation.** Your doodle moves instantly. The server rejects moves faster than `MaxSpeed` and sends a `correct` frame back.
+- **Slow clients are dropped, not waited on.** Each client has a bounded send buffer, so one bad connection cannot stall a room.
+- **WebSocket tickets.** Browsers can't send auth headers on WebSockets, so the JWT is exchanged for a single-use ticket (Redis `GETDEL`) instead of being put in the URL.
+- **Graceful shutdown.** On SIGTERM the server drains HTTP, then closes every socket with code 1001 so clients reconnect (to another pod, in Kubernetes).
+
+## Tech stack
+
+| Layer | Tech |
+|---|---|
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4, Phaser 4, Zustand, supabase-js |
+| Backend | Go 1.25, chi, coder/websocket, pgx, go-redis, golang-jwt + keyfunc, slog |
+| Data | Supabase Postgres, Supabase Auth, Redis 7 / Valkey 8 |
+| Infra | Docker, docker-compose, Render, Vercel, Kubernetes (kind) *(Phase 3+)* |
+
+## Project structure
 
 ```text
-echoroom/
-│
-├── frontend/
-│   ├── app/
-│   ├── components/
-│   ├── hooks/
-│   ├── services/
-│   └── store/
-│
-├── backend/
-│   ├── cmd/
-│   ├── internal/
-│   │   ├── auth/
-│   │   ├── chat/
-│   │   ├── ws/
-│   │   ├── redis/
-│   │   ├── db/
-│   │   ├── middleware/
-│   │   ├── config/
-│   │   └── logger/
-│   │
-│   ├── ent/
-│   │   └── schema/
-│   │
-│   └── pkg/
-│
-├── infra/
-│   ├── docker/
-│   ├── k8s/
-│   └── helm/
-│
-└── README.md
+backend/
+  cmd/api/            entry point, wiring, graceful shutdown
+  internal/auth/      Supabase JWT + dev-token verification, HTTP middleware
+  internal/room/      room actor, protocol, client, manager   ← the core
+  internal/ws/        tickets, WebSocket handler (read/write pumps)
+  internal/http/      router, health/readiness
+  internal/config/    env config (PORT, DATABASE_URL, REDIS_URL, …)
+  internal/db, redis, middleware, logger
+frontend/
+  app/                landing page, /room
+  game/               Phaser scene + Doodle
+  lib/                api, auth, protocol types, RoomSocket (reconnect)
+  store/              persisted session (name, colour)
+docs/PLAN.md          roadmap and decisions
+render.yaml           Render blueprint (API + Key Value)
+docker-compose.yml    local Postgres + Redis (+ API)
 ```
 
----
+## Run locally
 
-## Installation Requirements
+Prerequisites: Go 1.25+, Node 22+, pnpm, Docker.
 
-### Backend Environment
+```bash
+# 1. Dependencies (use other host ports if you already run Postgres/Redis natively)
+docker compose up -d postgres redis
+#   POSTGRES_HOST_PORT=55432 REDIS_HOST_PORT=56379 docker compose up -d postgres redis
 
-* Go 1.24+
-* PostgreSQL 16+
-* Redis 7+
-* Docker Engine
-* Docker Compose
+# 2. API — dev mode needs no Supabase project
+cd backend
+cp .env.example .env        # adjust DATABASE_URL / REDIS_URL ports if you changed them
+go run ./cmd/api            # http://localhost:8080/healthz
 
-### Frontend Environment
-
-* Node.js 22+
-* npm 10+
-
-### Infrastructure Environment
-
-* Docker
-* Kubernetes Cluster
-* kubectl
-* Helm
-
----
-
-## Environment Configuration
-
-### Backend Variables
-
-```env
-PORT=8080
-
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=password
-DB_NAME=echoroom
-
-REDIS_ADDR=localhost:6379
-
-JWT_SECRET=your-secret-key
+# 3. Frontend
+cd ../frontend
+cp .env.example .env.local
+pnpm install
+pnpm dev                    # http://localhost:3000
 ```
 
----
+Open two browser tabs. In dev mode each tab is a separate guest, so you'll see both doodles.
 
-## Core Data Model
+Tests (race detector on):
 
-### User
+```bash
+cd backend && go test -race ./...
+```
 
-* Unique User ID
-* Username
-* Email Address
-* Password Hash
-* Creation Timestamp
+## Deploy (free tier)
 
-### Room
+**1. Supabase**
+- Create a project in the Singapore region (`ap-southeast-1`).
+- Authentication → Sign In / Providers → enable **Anonymous sign-ins**. Turning on CAPTCHA is recommended, to stop bots creating anonymous users.
+- Project Settings → JWT Keys: make sure the project uses **JWT signing keys**. For a legacy HS256 project, migrate it, or set `SUPABASE_JWT_SECRET` on the API.
+- Connect → **Session pooler** connection string: this is `DATABASE_URL`.
 
-* Room Identifier
-* Room Name
-* Room Type
-* Creator Information
-* Creation Timestamp
+**2. Render**
+- New → Blueprint → select this repo. That creates `echoroom-api` and `echoroom-kv` from `render.yaml`.
+- Fill in `SUPABASE_URL`, `DATABASE_URL`, and `ALLOWED_ORIGINS` (your Vercel URL).
 
-### Message
+**3. Vercel**
+- Import the repo with Root Directory `frontend`.
+- Set these environment variables:
+  - `NEXT_PUBLIC_API_URL`: your Render URL
+  - `NEXT_PUBLIC_AUTH_MODE`: `supabase`
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
-* Message Identifier
-* Room Reference
-* Sender Reference
-* Message Content
-* Timestamp
+The free Render service sleeps after 15 minutes idle and takes about a minute to wake. The room page shows a "waking up" message while that happens.
 
----
+## Protocol
 
-## Engineering Principles
+Every WebSocket frame is `{"t": "<type>", "d": {...}}`.
 
-EchoRoom follows a set of engineering principles commonly adopted in production-grade distributed systems:
+| Direction | Type | Payload |
+|---|---|---|
+| → server | `move` | `x, y, dir, moving` |
+| ← client | `welcome` | `selfId, world{w,h}, players[]` |
+| ← client | `joined` / `left` | `Player` / `{id}` |
+| ← client | `state` | `players[]` (batched, 10 Hz) |
+| ← client | `correct` | `x, y` (your move was rejected) |
 
-* Separation of Concerns
-* Stateless Service Design
-* Event-Driven Communication
-* Structured Logging
-* Dependency Injection
-* Horizontal Scalability
-* Graceful Failure Recovery
-* Cloud-Native Deployment Practices
+Close codes: `1001` server restarting (reconnect) · `4001` opened in another tab (don't reconnect) · `4002` too slow · `4003` flooding.
 
----
+## Roadmap
 
-## Future Enhancements
-
-* Presence Tracking
-* Read Receipts
-* Media Attachments
-* Voice Channels
-* End-to-End Encryption
-* Distributed Tracing
-* Prometheus Monitoring
-* Grafana Dashboards
-
----
+See [docs/PLAN.md](docs/PLAN.md). Next up: quick rooms with invite codes and chat bubbles (Phase 2), then Redis fan-out and your first local Kubernetes cluster (Phase 3).
 
 ## Developer
 
 **Himanshu Sharma**
-

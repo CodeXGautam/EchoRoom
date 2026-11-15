@@ -26,7 +26,7 @@ func NewPool(ctx context.Context, cfg *config.PostgresConfig) (*DB, error) {
 	}
 	poolconfig, err := buildPoolConfig(cfg)
 	if err != nil {
-		return nil, errors.New("Pool config failed")
+		return nil, fmt.Errorf("build pool config: %w", err)
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolconfig)
@@ -66,9 +66,16 @@ func buildPoolConfig(cfg *config.PostgresConfig) (*pgxpool.Config, error) {
 		return nil, errors.New("postgres config is nil")
 	}
 
-	dsn, err := buildDSN(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("build postgres dsn: %w", err)
+	// DATABASE_URL wins. For Supabase's transaction pooler (port 6543) append
+	// default_query_exec_mode=simple_protocol: that pooler does not support
+	// the prepared statements pgx uses by default.
+	dsn := strings.TrimSpace(cfg.URL)
+	if dsn == "" {
+		var err error
+		dsn, err = buildDSN(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("build postgres dsn: %w", err)
+		}
 	}
 
 	poolConfig, err := pgxpool.ParseConfig(dsn)

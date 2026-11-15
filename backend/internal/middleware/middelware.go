@@ -87,3 +87,10 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap exposes the underlying writer so http.ResponseController and the
+// WebSocket library can reach http.Hijacker / deadline setters. Without it,
+// WebSocket upgrades through this middleware fail with 501.
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}

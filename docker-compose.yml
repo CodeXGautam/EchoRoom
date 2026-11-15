@@ -1,16 +1,56 @@
-version: '3.9'
+# Local development stack.
+#   docker compose up -d postgres redis      # just dependencies; run the API with `go run`
+#   docker compose up --build                # everything, API included
+# Already running Postgres/Redis natively? Pick other host ports:
+#   POSTGRES_HOST_PORT=55432 REDIS_HOST_PORT=56379 docker compose up --build
 
 services:
+  postgres:
+    image: postgres:17
+    container_name: echoroom-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: echoroom
+      POSTGRES_PASSWORD: echoroom
+      POSTGRES_DB: echoroom
+    ports:
+      - "${POSTGRES_HOST_PORT:-5434}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U echoroom"]
+      interval: 5s
+      retries: 10
+
   redis:
     image: redis:7
     container_name: echoroom-redis
-    restart: always
-
+    restart: unless-stopped
     ports:
-      - "6379:6379"
-
+      - "${REDIS_HOST_PORT:-6378}:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    container_name: echoroom-api
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      APP_ENV: development
+      AUTH_DEV_MODE: "true"
+      ALLOWED_ORIGINS: http://localhost:3000
+      DATABASE_URL: postgres://echoroom:echoroom@postgres:5432/echoroom?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      HTTP_PORT: "8080"
+    ports:
+      - "8080:8080"
 
 volumes:
+  postgres_data:
   redis_data:

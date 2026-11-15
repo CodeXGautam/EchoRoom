@@ -1,16 +1,20 @@
 package http
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
-	"fmt"
-	"errors"
-	"context"
 
+	"github.com/CodeXGautam/echoroom/internal/auth"
 	"github.com/CodeXGautam/echoroom/internal/config"
 	"github.com/CodeXGautam/echoroom/internal/middleware"
+	"github.com/CodeXGautam/echoroom/internal/room"
+	"github.com/CodeXGautam/echoroom/internal/ws"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -18,10 +22,18 @@ import (
 type Server struct {
 	srv    *http.Server
 	logger *slog.Logger
-	cfg    	config.HTTPConfig
+	cfg    config.HTTPConfig
 }
 
-func NewServer (cfg config.HTTPConfig, logger *slog.Logger, pg *pgxpool.Pool, rc *redis.Client) *Server {
+// Deps are the long-lived services handlers need.
+type Deps struct {
+	PG       *pgxpool.Pool
+	Redis    *redis.Client
+	Verifier auth.Verifier
+	Rooms    *room.Manager
+}
+
+func NewServer(cfg config.HTTPConfig, logger *slog.Logger, deps Deps) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -29,6 +41,34 @@ func NewServer (cfg config.HTTPConfig, logger *slog.Logger, pg *pgxpool.Pool, rc
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logging(logger))
 	r.Use(middleware.Recover(logger))
+
+	tickets := ws.NewTicketStore(deps.Redis)
+
+	// Liveness: the process is up. Never touches dependencies, so a Redis
+	// blip doesn't make Kubernetes/Render restart a healthy process.
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	// Readiness: dependencies reachable, safe to send traffic here.
+	r.Get("/readyz", readyHandler(deps))
+
+	r.Route("/api/v1", func(api chi.Router) {
+		api.Use(cors.Handler(cors.Options{
+			AllowedOrigins: cfg.AllowedOrigins,
+			AllowedMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
+			AllowedHeaders: []string{"Authorization", "Content-Type"},
+			MaxAge:         600,
+		}))
+		api.With(auth.Middleware(deps.Verifier)).Post("/ws/ticket", ws.TicketHandler(tickets, logger))
+	})
+
+	r.Method(http.MethodGet, "/ws", &ws.Handler{
+		Tickets:        tickets,
+		Rooms:          deps.Rooms,
+		OriginPatterns: cfg.AllowedOrigins,
+		Log:            logger,
+	})
 
 	readTimeout, err := time.ParseDuration(cfg.ReadTimeout)
 	if err != nil {
@@ -52,10 +92,10 @@ func NewServer (cfg config.HTTPConfig, logger *slog.Logger, pg *pgxpool.Pool, rc
 		logger: logger,
 		cfg:    cfg,
 	}
-	
+
 }
 
-func (s *Server) Start () error{
+func (s *Server) Start() error {
 	if s == nil || s.srv == nil {
 		return errors.New("http server is not configured")
 	}

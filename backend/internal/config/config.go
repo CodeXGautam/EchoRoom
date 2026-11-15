@@ -5,16 +5,35 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
+	Env      string // "development" or "production"
 	Postgres PostgresConfig
 	Redis    RedisConfig
 	HTTP     HTTPConfig
+	Auth     AuthConfig
+}
+
+// AuthConfig controls how access tokens are verified.
+type AuthConfig struct {
+	// SupabaseURL is the project URL, e.g. https://abcd.supabase.co.
+	// JWTs are verified against <SupabaseURL>/auth/v1/.well-known/jwks.json.
+	SupabaseURL string
+	// LegacyJWTSecret enables HS256 verification for Supabase projects that
+	// still use the legacy shared JWT secret. Leave empty for signing keys.
+	LegacyJWTSecret string
+	// DevMode accepts "dev:<id>" tokens without any signature check.
+	// Refused when Env is "production".
+	DevMode bool
 }
 
 type PostgresConfig struct {
+	// URL, if set, overrides every individual field below.
+	// Supabase gives you this as the "connection string".
+	URL      string
 	Username string
 	Password string
 	Host     string
@@ -29,9 +48,16 @@ type HTTPConfig struct {
 	ReadTimeout     string
 	WriteTimeout    string
 	ShutdownTimeout string
+	// AllowedOrigins are full origins (scheme://host[:port]) allowed for
+	// CORS and WebSocket upgrades. path.Match wildcards are allowed,
+	// e.g. https://*.vercel.app.
+	AllowedOrigins []string
 }
 
 type RedisConfig struct {
+	// URL, if set (redis:// or rediss://), overrides every field below
+	// except PingTimeout. Render Key Value gives you this.
+	URL           string
 	Username      string
 	Password      string
 	Host          string
@@ -72,7 +98,15 @@ func LoadConfig() (*Config, error) {
 	var cfg Config
 	var errs []error
 
+	cfg.Env = getEnv("APP_ENV", "development")
+
+	// Load auth configuration
+	cfg.Auth.SupabaseURL = strings.TrimRight(getEnv("SUPABASE_URL", ""), "/")
+	cfg.Auth.LegacyJWTSecret = getEnv("SUPABASE_JWT_SECRET", "")
+	cfg.Auth.DevMode = getEnvAsBool("AUTH_DEV_MODE", false, &errs)
+
 	// Load PostgreSQL configuration
+	cfg.Postgres.URL = getEnv("DATABASE_URL", "")
 	cfg.Postgres.Username = getEnv("POSTGRES_USERNAME", defaultPostgresUsername)
 	cfg.Postgres.Password = getEnv("POSTGRES_PASSWORD", defaultPostgresPassword)
 	cfg.Postgres.Host = getEnv("POSTGRES_HOST", defaultPostgresHost)
@@ -82,6 +116,7 @@ func LoadConfig() (*Config, error) {
 	cfg.Postgres.MaxConns = getEnvAsInt("POSTGRES_MAX_CONNS", defaultPostgresMaxConns, &errs)
 
 	// Load Redis configuration
+	cfg.Redis.URL = getEnv("REDIS_URL", "")
 	cfg.Redis.Username = getEnv("REDIS_USERNAME", defaultRedisUsername)
 	cfg.Redis.Password = getEnv("REDIS_PASSWORD", defaultRedisPassword)
 	cfg.Redis.Host = getEnv("REDIS_HOST", defaultRedisHost)
@@ -93,7 +128,12 @@ func LoadConfig() (*Config, error) {
 	cfg.Redis.PingTimeout = getEnv("REDIS_PING_TIMEOUT", defaultRedisPingTimeout)
 
 	// Load HTTP configuration
+	// Render (and most PaaS) inject PORT; it wins over HTTP_PORT.
 	cfg.HTTP.Port = getEnvAsInt("HTTP_PORT", defaultHTTPPort, &errs)
+	if _, ok := os.LookupEnv("PORT"); ok {
+		cfg.HTTP.Port = getEnvAsInt("PORT", defaultHTTPPort, &errs)
+	}
+	cfg.HTTP.AllowedOrigins = splitList(getEnv("ALLOWED_ORIGINS", "http://localhost:3000"))
 	cfg.HTTP.ReadTimeout = getEnv("HTTP_READ_TIMEOUT", defaultHTTPReadTimeout)
 	cfg.HTTP.WriteTimeout = getEnv("HTTP_WRITE_TIMEOUT", defaultHTTPWriteTimeout)
 	cfg.HTTP.ShutdownTimeout = getEnv("HTTP_SHUTDOWN_TIMEOUT", defaultHTTPShutdownTimeout)
@@ -106,15 +146,15 @@ func LoadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-func getEnv (key, defaultValue string) string {
+func getEnv(key, defaultValue string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value
 	}
 	return defaultValue
 }
 
-func getEnvAsInt (key string, defaultValue int, errs *[]error) int {
-	if value, exists := os.LookupEnv(key);exists{
+func getEnvAsInt(key string, defaultValue int, errs *[]error) int {
+	if value, exists := os.LookupEnv(key); exists {
 		i, err := strconv.Atoi(value)
 		if err != nil {
 			*errs = append(*errs, fmt.Errorf("%s must be an integer: %w", key, err))
@@ -123,13 +163,13 @@ func getEnvAsInt (key string, defaultValue int, errs *[]error) int {
 		return i
 	}
 	return defaultValue
-} 
+}
 
-func getEnvAsBool (key string , defaultValue bool ,errs *[]error) bool{
-	if value , exists := os.LookupEnv(key); exists{
+func getEnvAsBool(key string, defaultValue bool, errs *[]error) bool {
+	if value, exists := os.LookupEnv(key); exists {
 		i, err := strconv.ParseBool(value)
 		if err != nil {
-			*errs = append(*errs, fmt.Errorf("%s must be bool: %w", key , err))
+			*errs = append(*errs, fmt.Errorf("%s must be bool: %w", key, err))
 			return defaultValue
 		}
 		return i
@@ -137,7 +177,56 @@ func getEnvAsBool (key string , defaultValue bool ,errs *[]error) bool{
 	return defaultValue
 }
 
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func validateConfig(cfg *Config, errs *[]error) {
+	if cfg.Env != "development" && cfg.Env != "production" {
+		*errs = append(*errs, fmt.Errorf("APP_ENV must be development or production: %q", cfg.Env))
+	}
+	if cfg.Auth.DevMode && cfg.Env == "production" {
+		*errs = append(*errs, errors.New("AUTH_DEV_MODE must not be enabled when APP_ENV=production"))
+	}
+	if !cfg.Auth.DevMode && cfg.Auth.SupabaseURL == "" {
+		*errs = append(*errs, errors.New("SUPABASE_URL is required unless AUTH_DEV_MODE=true"))
+	}
+	if len(cfg.HTTP.AllowedOrigins) == 0 {
+		*errs = append(*errs, errors.New("ALLOWED_ORIGINS must list at least one origin"))
+	}
+	for _, o := range cfg.HTTP.AllowedOrigins {
+		if o == "*" {
+			*errs = append(*errs, errors.New("ALLOWED_ORIGINS must not be *"))
+		}
+	}
+
+	// A URL replaces the individual fields, so skip their checks.
+	if cfg.Postgres.URL == "" {
+		validatePostgresFields(cfg, errs)
+	}
+	if cfg.Postgres.MaxConns <= 0 {
+		*errs = append(*errs, fmt.Errorf("POSTGRES_MAX_CONNS must be greater than 0: %d", cfg.Postgres.MaxConns))
+	}
+	if cfg.Redis.URL == "" {
+		validateRedisFields(cfg, errs)
+	}
+	validateDuration("REDIS_PING_TIMEOUT", cfg.Redis.PingTimeout, errs)
+
+	if cfg.HTTP.Port <= 0 || cfg.HTTP.Port > 65535 {
+		*errs = append(*errs, fmt.Errorf("HTTP_PORT must be between 1 and 65535: %d", cfg.HTTP.Port))
+	}
+	validateDuration("HTTP_READ_TIMEOUT", cfg.HTTP.ReadTimeout, errs)
+	validateDuration("HTTP_WRITE_TIMEOUT", cfg.HTTP.WriteTimeout, errs)
+	validateDuration("HTTP_SHUTDOWN_TIMEOUT", cfg.HTTP.ShutdownTimeout, errs)
+}
+
+func validatePostgresFields(cfg *Config, errs *[]error) {
 	if cfg.Postgres.Host == "" {
 		*errs = append(*errs, errors.New("POSTGRES_HOST is required"))
 	}
@@ -147,10 +236,9 @@ func validateConfig(cfg *Config, errs *[]error) {
 	if cfg.Postgres.Database == "" {
 		*errs = append(*errs, errors.New("POSTGRES_DATABASE is required"))
 	}
-	if cfg.Postgres.MaxConns <= 0 {
-		*errs = append(*errs, fmt.Errorf("POSTGRES_MAX_CONNS must be greater than 0: %d", cfg.Postgres.MaxConns))
-	}
+}
 
+func validateRedisFields(cfg *Config, errs *[]error) {
 	if cfg.Redis.Host == "" {
 		*errs = append(*errs, errors.New("REDIS_HOST is required"))
 	}
@@ -165,14 +253,6 @@ func validateConfig(cfg *Config, errs *[]error) {
 			*errs = append(*errs, errors.New("REDIS_TLS_ENABLED must be true when REDIS_CA_CERT_PATH is set"))
 		}
 	}
-	validateDuration("REDIS_PING_TIMEOUT", cfg.Redis.PingTimeout, errs)
-
-	if cfg.HTTP.Port <= 0 || cfg.HTTP.Port > 65535 {
-		*errs = append(*errs, fmt.Errorf("HTTP_PORT must be between 1 and 65535: %d", cfg.HTTP.Port))
-	}
-	validateDuration("HTTP_READ_TIMEOUT", cfg.HTTP.ReadTimeout, errs)
-	validateDuration("HTTP_WRITE_TIMEOUT", cfg.HTTP.WriteTimeout, errs)
-	validateDuration("HTTP_SHUTDOWN_TIMEOUT", cfg.HTTP.ShutdownTimeout, errs)
 }
 
 func validateDuration(key, value string, errs *[]error) {
