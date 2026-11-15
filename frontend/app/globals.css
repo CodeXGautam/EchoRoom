@@ -1,26 +1,41 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f6efe6;
+  --foreground: #2b2b3a;
+  --ink: #2b2b3a;
+  --paper: #fffaf3;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-ink: var(--ink);
+  --color-paper: var(--paper);
+  --font-sans: var(--font-fredoka), ui-rounded, system-ui, sans-serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* Hand-drawn feel: thick ink outline + offset shadow. */
+.sketch {
+  border: 3px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+
+@keyframes doodle-bob {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  50% { transform: translateY(-6px) scaleY(1.03); }
+}
+.doodle-bob {
+  animation: doodle-bob 1.6s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .doodle-bob { animation: none; }
 }
