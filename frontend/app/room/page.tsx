@@ -82,7 +82,7 @@ export default function RoomPage() {
           Couldn&apos;t join: {status.detail}
           <br />
           <Link className="mt-3 inline-block underline" href="/">
-            Back
+            Back to the start
           </Link>
         </Overlay>
       )}

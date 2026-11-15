@@ -27,5 +27,9 @@ function projectOrigin(raw: string | undefined): string {
 export const SUPABASE_URL = projectOrigin(process.env.NEXT_PUBLIC_SUPABASE_URL);
 export const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
+// Cloudflare Turnstile site key (public). Set it only if CAPTCHA protection is
+// enabled in Supabase with the Turnstile provider; leave empty otherwise.
+export const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "";
+
 // Must match backend room.MaxSpeed, or the server will keep correcting you.
 export const MAX_SPEED = 220;

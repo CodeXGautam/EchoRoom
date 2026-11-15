@@ -1,4 +1,5 @@
 import { ApiError, requestTicket } from "./api";
+import { SignInRequiredError } from "./auth";
 import { WS_URL } from "./config";
 import {
   CLOSE_REPLACED,
@@ -83,6 +84,10 @@ export class RoomSocket {
       if (this.stopped) return;
       // 400/401 won't fix themselves by retrying.
       if (err instanceof ApiError && (err.status === 400 || err.status === 401)) {
+        this.setStatus("failed", err.message);
+        return;
+      }
+      if (err instanceof SignInRequiredError) {
         this.setStatus("failed", err.message);
         return;
       }
